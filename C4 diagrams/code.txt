@@ -1,0 +1,113 @@
+@startuml C4_Context
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
+
+title C4 Context
+
+Person(owner, "Владелец парковки", "Сдает место, управляет календарем,\nполучает оплату через эскроу")
+Person(driver, "Водитель", "Ищет парковку на карте,\nбронирует, оплачивает")
+Person(operator, "Оператор платформы", "Разрешает споры, управляет\nпользователями и транзакциями")
+
+System(parking_system, "PocketParked", "Платформа для аренды частных парковок\n(Модульный монолит на Django)")
+
+System_Ext(yandex_maps, "Yandex Maps API", "Геосервис: тайлы карты,\nгеокодирование, маршрутизация")
+System_Ext(payment_gateway, "Платежный шлюз", "Эскроу, холдирование средств,\nвыплаты владельцам")
+System_Ext(notify_service, "Сервис уведомлений\n(GreenSMS / SendGrid)", "Email, SMS, Push-уведомления\nо бронированиях и спорах")
+System_Ext(auth_provider, "OAuth2 Провайдеры\n(Yandex / VK / Google)", "Социальный вход,\nверификация пользователей")
+
+Rel(owner, parking_system, "Управляет местами и календарем")
+Rel(driver, parking_system, "Ищет, бронирует, оплачивает")
+Rel(operator, parking_system, "Администрирует, решает споры")
+
+Rel(parking_system, yandex_maps, "Загружает карту, геокодирует адреса")
+Rel(parking_system, payment_gateway, "Холдирование, списание, payout")
+Rel(parking_system, notify_service, "Триггер уведомлений")
+Rel(parking_system, auth_provider, "Аутентификация через OAuth2")
+
+@enduml
+
+
+
+@startuml C4_Container
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+title C4 Container 
+
+Person(driver, "Водитель")
+Person(owner, "Владелец")
+
+System_Boundary(mono, "PocketParked") {
+    Container(web_app, "Web SPA / Mobile App", "React/Vue + Yandex Maps JS API", "UI поиска, бронирования,\nуправления календарем")
+    Container(django_api, "Django REST API", "Python / Django / DRF", "Бизнес-логика, REST API,\nAuth, Geo-queries")
+    Container(celery_worker, "Celery Workers", "Python / Celery", "Фоновые задачи: уведомления,\nвыплаты, очистка просроченных холдов")
+    
+    ContainerDb(postgres, "PostgreSQL + PostGIS", "Реляционная СУБД", "Парковки, бронирования,\nпользователи, геоданные")
+    ContainerDb(redis, "Redis", "In-Memory Store", "Кэш геозапросов, очереди Celery,\nJWT blacklist, rate-limiting")
+}
+
+System_Ext(yandex, "Yandex Maps API")
+System_Ext(payment, "Платежный шлюз")
+System_Ext(notify, "Сервис уведомлений")
+
+Rel(driver, web_app, "Использует (браузер/приложение)")
+Rel(owner, web_app, "Управляет (браузер/приложение)")
+
+Rel(web_app, django_api, "REST API (JSON / GeoJSON)")
+Rel(web_app, yandex, "Загрузка тайлов и маркеров")
+
+Rel(django_api, postgres, "SQL + PostGIS queries\n(Exclusion Constraints)")
+Rel(django_api, redis, "Кэш, токены, pub/sub")
+Rel(django_api, celery_worker, "Async tasks via Redis broker")
+Rel(django_api, payment, "API эскроу / холдирования")
+Rel(django_api, notify, "Trigger уведомлений")
+
+Rel(celery_worker, postgres, "Чтение/запись БД")
+Rel(celery_worker, redis, "Broker + Result backend")
+Rel(celery_worker, payment, "Выплаты владельцам после аренды")
+Rel(celery_worker, notify, "Отправка Email/SMS/Push")
+
+@enduml
+
+
+@startuml C4_Component
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+title C4 Component
+
+Container(django_api, "Django REST API", "Python / Django / DRF") {
+    Component(accounts, "Accounts Module", "Django App", "Регистрация, JWT-аутентификация,\nOAuth2")
+    Component(parkings, "Parkings Module", "Django App + GeoDjango", "CRUD парковок, геозапросы,\nфотографии, тарифы, доступность")
+    Component(bookings, "Bookings Module", "Django App", "Бронирования, Exclusion Constraints,\nкалендарь, разрешение конфликтов")
+    Component(payments, "Payments Module", "Django App", "Эскроу, холдирование средств,\nтранзакции, выплаты владельцам")
+    Component(reviews, "Reviews Module", "Django App", "Взаимные рейтинги, отзывы,\nмодерация контента")
+    Component(admin_panel, "Operator Admin", "Django Admin / Custom", "Управление спорами,\nпользователями, транзакциями")
+    Component(common, "Common / Shared", "Utils, Middleware", "OpenAPI,\nRate Limiting, базовые модели")
+}
+
+ComponentDb(postgres, "PostgreSQL + PostGIS")
+ComponentDb(redis, "Redis")
+
+Rel(accounts, postgres, "Чтение/запись пользователей,\nпрофилей, OAuth-токенов")
+Rel(accounts, redis, "Хранение JWT-blacklist,\nсессий")
+
+Rel(parkings, postgres, "Хранение парковок, доступности,\nработа с геоиндексами")
+Rel(parkings, redis, "Кэширование результатов\nгеопоиска")
+
+Rel(bookings, postgres, "Создание бронирований,\nпроверка Exclusion Constraints")
+Rel(bookings, payments, "Создание холда при бронировании")
+Rel(bookings, parkings, "Проверка доступности\n(range-запрос)")
+
+Rel(payments, postgres, "Запись транзакций,\nведение реестра эскроу")
+Rel(payments, bookings, "Подтверждение/отмена\nбронирования по событию оплаты")
+
+Rel(reviews, accounts, "Ссылка на автора отзыва")
+Rel(reviews, bookings, "Привязка к бронированию\n(верифицированный отзыв)")
+
+Rel(admin_panel, bookings, "Разрешение споров\nпо бронированиям")
+Rel(admin_panel, payments, "Возвраты / ручные выплаты")
+Rel(admin_panel, reviews, "Модерация отзывов")
+
+Rel(common, redis, "Ограничение частоты запросов,\nутилиты кэширования")
+Rel(common, postgres, "Доступ к общим базовым моделям")
+
+@enduml
+
